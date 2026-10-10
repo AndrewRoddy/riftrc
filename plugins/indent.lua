@@ -4,6 +4,7 @@ local M = {}
 local opts = {
   shiftwidth = nil, -- nil follows the buffer's tab_width
   mappings = true,
+  reselect = true, -- keep the selection after visual `>` / `<`, like `>gv`
 }
 
 local function shiftwidth()
@@ -152,8 +153,91 @@ local function editable()
   return true
 end
 
+-- rift 0.7.1 (the crates.io release) predates `rift.get_selection` and has
+-- four bugs this plugin has to steer around there:
+--   * replace_lines drops the newline after the range, joining the next line
+--     onto the last replaced one;
+--   * replace_lines is two undo steps, so `u` first deletes the line;
+--   * the snapshot plugins read is only refreshed when the text changes, so
+--     after `j` rift.get_cursor() still reports the last edited line;
+--   * plugin commands run before that refresh, so a fast `>>>>` sees the line
+--     from before the first shift.
+-- On those builds only the indent is edited, with insert/delete at the start
+-- of the line inside one Insert-mode undo group; the cursor comes from
+-- CursorMoved events; and the plugin remembers what it just wrote until the
+-- snapshot catches up.
+local legacy = rift.get_selection == nil
+
+-- Lines this plugin edited since the last snapshot, by row: { before, after }.
+local written = {}
+local written_buf
+
+-- The cursor as of the last CursorMoved event or shift, when newer than the
+-- snapshot: { buf, row, col }.
+local moved
+
+local function cursor()
+  if legacy and moved and moved.buf == rift.current_buf() then
+    return moved.row, moved.col
+  end
+  return rift.get_cursor()
+end
+
+local function place_cursor(row, col)
+  rift.set_cursor(row, col)
+  if legacy then moved = { buf = rift.current_buf(), row = row, col = col } end
+end
+
 local function line_at(row)
-  return rift.get_lines(row, row)[1] or ""
+  local line = rift.get_lines(row, row)[1] or ""
+  local w = written[row]
+  if legacy and w and written_buf == rift.current_buf() and line == w.before then
+    return w.after
+  end
+  return line
+end
+
+local function lines_in(s, e)
+  local out = {}
+  for row = s, e do out[#out + 1] = line_at(row) end
+  return out
+end
+
+-- Rewrites line `row` from `old` to `new` by touching only the indent that
+-- differs. An insert is a single undo step on every rift build.
+local function edit_indent(row, old, new)
+  local old_ws = old:match("^[ \t]*")
+  local new_ws = new:match("^[ \t]*")
+  local p = 0
+  while p < #old_ws and p < #new_ws and old_ws:byte(p + 1) == new_ws:byte(p + 1) do
+    p = p + 1
+  end
+  rift.set_cursor(row, p)
+  if #old_ws > p then rift.delete_forward(#old_ws - p) end
+  if #new_ws > p then rift.insert(new_ws:sub(p + 1)) end
+  if written_buf ~= rift.current_buf() then
+    written, written_buf = {}, rift.current_buf()
+  end
+  -- Keep the text the snapshot still shows, however many shifts ago it was.
+  local prev = written[row]
+  local before = (prev and prev.after == old) and prev.before or old
+  written[row] = { before = before, after = new }
+end
+
+local function replace(s, e, lines)
+  if not legacy then
+    rift.replace_lines(s, e, lines)
+    return
+  end
+  -- Each delete is its own undo step on these builds; Insert mode groups
+  -- everything until it is left into one, so `u` undoes the whole shift.
+  rift.exec_action("mode:insert")
+  for i, new in ipairs(lines) do
+    local row = s + i - 1
+    local old = line_at(row)
+    if old ~= new then edit_indent(row, old, new) end
+  end
+  rift.exec_action("mode:normal")
 end
 
 -- Shifts lines [s, e] (1-indexed, inclusive). As in Neovim (nostartofline),
@@ -161,17 +245,17 @@ end
 function M.shift_range(dir, s, e)
   if not editable() then return end
   local ts = rift.get_tab_width()
-  local row, col = rift.get_cursor()
+  local row, col = cursor()
   local want = cursor_vcol(line_at(row), col, ts)
   local total = rift.get_line_count()
   s, e = math.max(1, math.min(s, e)), math.min(total, math.max(s, e))
-  local new = shift_lines(rift.get_lines(s, e), dir)
-  rift.replace_lines(s, e, new)
-  rift.set_cursor(s, coladvance(new[1], want, ts))
+  local new = shift_lines(lines_in(s, e), dir)
+  replace(s, e, new)
+  place_cursor(s, coladvance(new[1], want, ts))
 end
 
 function M.shift_current(dir, count)
-  local row = rift.get_cursor()
+  local row = cursor()
   M.shift_range(dir, row, row + math.max(1, count or 1) - 1)
 end
 
@@ -180,6 +264,10 @@ end
 -- the text from the block's left edge, like Neovim.
 function M.shift_selection(dir)
   if not editable() then return end
+  if legacy then
+    rift.notify("warn", "Indent: this rift build has no rift.get_selection()")
+    return
+  end
   local regions = rift.get_selection()
   if #regions == 0 then
     rift.notify("warn", "Indent: nothing selected")
@@ -252,11 +340,31 @@ function M.shift_selection(dir)
     end
     local run = {}
     for row = s, e do run[#run + 1] = new[row] end
-    rift.replace_lines(s, e, run)
+    replace(s, e, run)
     i = i + 1
   end
 
-  rift.set_cursor(target_row, target_col)
+  if not (opts.reselect and main.active) then
+    rift.set_cursor(target_row, target_col)
+    return
+  end
+
+  -- Select the same rows and columns again, like Neovim's `>gv`: the anchor
+  -- is whichever end of the selection the cursor isn't on.
+  local anchor_row, anchor_col = main.start_row, main.start_col
+  if cur_row == main.start_row and cur_col == main.start_col then
+    anchor_row, anchor_col = main.end_row, main.end_col
+  end
+  -- A column past a now-shorter line lands on its end, which Visual mode
+  -- (unlike Normal) can select.
+  local function clamped(row, col)
+    local line = new[row] or line_at(row)
+    return row, math.min(col, utf8.len(line) or #line)
+  end
+  rift.set_cursor(clamped(anchor_row, anchor_col))
+  rift.exec_action(({ char = "mode:visual", line = "mode:visual_line",
+    block = "mode:visual_block" })[main.kind])
+  rift.set_cursor(clamped(cur_row, cur_col))
 end
 
 local function count_arg(args)
@@ -265,6 +373,18 @@ end
 
 function M.setup(user_opts)
   for k, v in pairs(user_opts or {}) do opts[k] = v end
+
+  if legacy then
+    -- Both fire once per render, right after the buffer snapshot refreshes.
+    -- TextChangedCoarse fires once per render, right after the snapshot is
+    -- refreshed; CursorMoved fires then too but refreshes nothing.
+    rift.on("TextChangedCoarse", function()
+      written, moved = {}, nil
+    end)
+    rift.on("CursorMoved", function(ev)
+      moved = { buf = ev.buf, row = ev.row, col = ev.col }
+    end)
+  end
 
   rift.register_command("Indent", function(args)
     M.shift_current(1, count_arg(args))

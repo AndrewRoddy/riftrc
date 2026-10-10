@@ -45,7 +45,7 @@ Neovim-style line shifting, which rift has no built-in equivalent for.
 |---|---|
 | `>>` | Shift the current line one shiftwidth right |
 | `<<` | Shift the current line one shiftwidth left |
-| `>` / `<` (visual) | Shift the selection right / left |
+| `>` / `<` (visual) | Shift the selection right / left and keep it selected, like `>gv` (`setup{ reselect = false }` to drop it) |
 | `:Indent [n]` | Shift `n` lines right, starting at the cursor (default 1) |
 | `:Dedent [n]` | Shift `n` lines left, starting at the cursor (default 1) |
 
@@ -63,6 +63,13 @@ Not supported: a count (`3>>`, `V3>`), `.` to repeat a shift, and `>` / `<`
 as operators (`>j`, `>ap`). rift doesn't pass the pending count to Lua, `.`
 only replays built-in edits, and plugins have no operator-pending hook.
 `:Indent 3` does the same job as `3>>`.
+
+On rift 0.7.1 from crates.io, `>>`, `<<` and `:Indent`/`:Dedent` work, but
+visual `>` / `<` don't (0.7.1 has no `rift.get_selection()` or visual-mode
+plugin maps). 0.7.1 also has bugs that would join the next line onto the
+shifted one, make `u` delete the line, and shift the line you last edited
+instead of the one under the cursor. The plugin works around all three there,
+so it's safe on either build.
 
 The dedent key is written `"<lt><lt>"`: `parse_key_sequence` reads a bare `<`
 as the start of a `<...>` token, and rift drops an unparseable mapping silently.
