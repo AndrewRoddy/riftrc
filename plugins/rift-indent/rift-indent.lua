@@ -1,5 +1,22 @@
 -- Neovim-style `>>` / `<<` line shifting, plus `>` / `<` in visual mode.
 local M = {}
+local MODULE = ...
+
+-- Helpers -------------------------------------------------------------------
+
+-- Keymaps run the command through `:lua`: rift refreshes what plugins read
+-- (cursor, lines, mode) right before `:lua`, but not before a mapped
+-- `editor:run:Command`, which would see the cursor from before the last
+-- motion. _rift_commands is rift's table of registered plugin commands.
+local function map(mode, keys, cmdline)
+  local name, rest = cmdline:match("^(%S+)%s*(.*)$")
+  local args = {}
+  for a in rest:gmatch("%S+") do args[#args + 1] = string.format("%q", a) end
+  rift.map(mode, keys, string.format("editor:run:lua _rift_commands[%q].fn({ %s })",
+    name, table.concat(args, ", ")))
+end
+
+-----------------------------------------------------------------------------
 
 local opts = {
   shiftwidth = nil, -- nil follows the buffer's tab_width
@@ -176,10 +193,9 @@ local written_buf
 -- snapshot: { buf, row, col }.
 local moved
 
+-- Mappings run through :lua (map), which refreshes the snapshot first,
+-- so rift.get_cursor() is current; the old CursorMoved tracking is unused.
 local function cursor()
-  if legacy and moved and moved.buf == rift.current_buf() then
-    return moved.row, moved.col
-  end
   return rift.get_cursor()
 end
 
@@ -402,13 +418,17 @@ function M.setup(user_opts)
   if not opts.mappings then return end
 
   -- A bare "<" opens a <...> key token, so it has to be written <lt>.
-  rift.map("n", ">>", "editor:run:Indent")
-  rift.map("n", "<lt><lt>", "editor:run:Dedent")
-  rift.map("v", ">", "editor:run:IndentSelection")
-  rift.map("v", "<lt>", "editor:run:DedentSelection")
+  map("n", ">>", "Indent")
+  map("n", "<lt><lt>", "Dedent")
+  map("v", ">", "IndentSelection")
+  map("v", "<lt>", "DedentSelection")
 end
 
 M._shift_line = shift_line
 M._shift_block_line = shift_block_line
+
+-- Dropped straight into rift's plugins directory rather than require()d
+-- from a config: set up with the defaults.
+if not MODULE then M.setup() end
 
 return M

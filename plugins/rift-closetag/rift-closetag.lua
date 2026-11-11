@@ -2,6 +2,44 @@
 -- closing tag after the cursor. Typing `>` again right away moves the closing
 -- tag onto its own line with the cursor on an indented line in between.
 local M = {}
+local MODULE = ...
+
+-- Helpers -------------------------------------------------------------------
+
+-- rift.replace_lines drops the newline after the range, joining the next
+-- line onto the last new one, and takes two undo steps. This puts the
+-- newline back and, from Normal mode, wraps the edit in a brief Insert mode
+-- so `u` undoes it in one step.
+local function set_lines(s, e, lines)
+  local out = { table.unpack(lines) }
+  if #out > 0 and e < rift.get_line_count() then out[#out + 1] = "" end
+  local wrap = rift.get_mode() == "normal"
+  if wrap then rift.exec_action("mode:insert") end
+  rift.replace_lines(s, e, out)
+  if wrap then rift.exec_action("mode:normal") end
+end
+
+-- Length in characters (rift's columns count characters, not bytes).
+local function char_len(s) return utf8.len(s) or #s end
+
+local function current_line()
+  local row = rift.get_cursor()
+  return rift.get_lines(row, row)[1] or ""
+end
+
+-- Keymaps run the command through `:lua`: rift refreshes what plugins read
+-- (cursor, lines, mode) right before `:lua`, but not before a mapped
+-- `editor:run:Command`, which would see the cursor from before the last
+-- motion. _rift_commands is rift's table of registered plugin commands.
+local function map(mode, keys, cmdline)
+  local name, rest = cmdline:match("^(%S+)%s*(.*)$")
+  local args = {}
+  for a in rest:gmatch("%S+") do args[#args + 1] = string.format("%q", a) end
+  rift.map(mode, keys, string.format("editor:run:lua _rift_commands[%q].fn({ %s })",
+    name, table.concat(args, ", ")))
+end
+
+-----------------------------------------------------------------------------
 
 local opts = {
   -- File extensions the plugin is active for (vim-closetag's closetag_filenames)
@@ -106,7 +144,7 @@ end
 
 function M.on_gt()
   local row, col = rift.get_cursor()
-  local line = rift.get_current_line()
+  local line = current_line()
   local split = byte_len(line, col)
   local before, after = line:sub(1, split), line:sub(split + 1)
   local ext = ext_of(rift.get_filepath())
@@ -124,7 +162,7 @@ function M.on_gt()
   if open and after:sub(1, #open + 3) == "</" .. open .. ">" then
     local indent = line:match("^%s*")
     local inner = indent .. indent_unit()
-    rift.replace_lines(row, row, { before, inner, indent .. after })
+    set_lines(row, row, { before, inner, indent .. after })
     rift.set_cursor(row + 1, chars(inner))
     return
   end
@@ -143,7 +181,7 @@ end
 local function refresh(path)
   local want = enabled_ext[ext_of(path)] == true
   if want and not mapped then
-    rift.map("i", ">", "editor:run:CloseTagGt")
+    map("i", ">", "CloseTagGt")
   elseif mapped and not want then
     rift.unmap("i", ">")
   end
@@ -170,5 +208,9 @@ function M.setup(user_opts)
   rift.on("BufEnter", function(ev) refresh(path_of(ev.buf)) end)
   rift.on("BufOpen", function(ev) refresh(ev.path or path_of(ev.buf)) end)
 end
+
+-- Dropped straight into rift's plugins directory rather than require()d
+-- from a config: set up with the defaults.
+if not MODULE then M.setup() end
 
 return M

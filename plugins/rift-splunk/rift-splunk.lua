@@ -4,6 +4,7 @@
 -- rift has no SPL tree-sitter grammar, so this tokenizes in Lua and colors
 -- tokens with annotations whose faces resolve against the active theme.
 local M = {}
+local MODULE = ...
 
 local NS = "splunk."
 
@@ -330,5 +331,9 @@ end
 
 M._tokenize = tokenize
 M._tokenize_xml = tokenize_xml
+
+-- Dropped straight into rift's plugins directory rather than require()d
+-- from a config: set up with the defaults.
+if not MODULE then M.setup() end
 
 return M

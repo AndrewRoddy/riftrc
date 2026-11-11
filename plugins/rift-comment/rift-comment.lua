@@ -1,5 +1,35 @@
 -- Comment.nvim for rift: toggle line (`gc`) and block (`gb`) comments.
 local M = {}
+local MODULE = ...
+
+-- Helpers -------------------------------------------------------------------
+
+-- rift.replace_lines drops the newline after the range, joining the next
+-- line onto the last new one, and takes two undo steps. This puts the
+-- newline back and, from Normal mode, wraps the edit in a brief Insert mode
+-- so `u` undoes it in one step.
+local function set_lines(s, e, lines)
+  local out = { table.unpack(lines) }
+  if #out > 0 and e < rift.get_line_count() then out[#out + 1] = "" end
+  local wrap = rift.get_mode() == "normal"
+  if wrap then rift.exec_action("mode:insert") end
+  rift.replace_lines(s, e, out)
+  if wrap then rift.exec_action("mode:normal") end
+end
+
+-- Keymaps run the command through `:lua`: rift refreshes what plugins read
+-- (cursor, lines, mode) right before `:lua`, but not before a mapped
+-- `editor:run:Command`, which would see the cursor from before the last
+-- motion. _rift_commands is rift's table of registered plugin commands.
+local function map(mode, keys, cmdline)
+  local name, rest = cmdline:match("^(%S+)%s*(.*)$")
+  local args = {}
+  for a in rest:gmatch("%S+") do args[#args + 1] = string.format("%q", a) end
+  rift.map(mode, keys, string.format("editor:run:lua _rift_commands[%q].fn({ %s })",
+    name, table.concat(args, ", ")))
+end
+
+-----------------------------------------------------------------------------
 
 -- Comment strings per filetype as { line, block }, each "left%sright".
 -- Keys are rift language names first, then bare file extensions for files
@@ -258,7 +288,7 @@ end
 -- Replaces lines [s, e] with `new` and keeps the cursor on the same text.
 local function apply(s, e, new, cursor_row, cursor_col)
   local old = rift.get_lines(s, e)
-  rift.replace_lines(s, e, new)
+  set_lines(s, e, new)
   if cursor_row and cursor_row >= s and cursor_row <= e then
     local i = cursor_row - s + 1
     local delta = chars(new[i] or "") - chars(old[i] or "")
@@ -300,6 +330,12 @@ end
 -- characters of a charwise selection.
 function M.toggle_selection(kind)
   if not editable() then return end
+  -- rift has no visual-mode plugin maps or selection API yet (see
+  -- SPEC/SPEC.md), so this only runs on a build that adds rift.get_selection.
+  if not rift.get_selection then
+    rift.notify("warn", "Comment: this rift build can't read the selection")
+    return
+  end
   local regions = rift.get_selection()
   if #regions == 0 then
     rift.notify("warn", "Comment: nothing selected")
@@ -333,7 +369,7 @@ function M.toggle_selection(kind)
     else
       new = toggle_lines(lines, left, right)
     end
-    rift.replace_lines(r.start_row, r.end_row, new)
+    set_lines(r.start_row, r.end_row, new)
   end
   local indent = #(rift.get_lines(first_row, first_row)[1] or ""):match("^%s*")
   rift.set_cursor(first_row, indent)
@@ -371,7 +407,7 @@ function M.insert_comment(where)
     local body = line:gsub("%s+$", "")
     local sep = body == "" and "" or " "
     local new = body .. sep .. left .. pad()
-    rift.replace_lines(row, row, { new .. tail })
+    set_lines(row, row, { new .. tail })
     rift.set_cursor(row, chars(new))
     rift.exec_action("mode:insert")
     return
@@ -380,10 +416,10 @@ function M.insert_comment(where)
   local indent = line:match("^%s*")
   local new = indent .. left .. pad()
   if where == "below" then
-    rift.replace_lines(row, row, { line, new .. tail })
+    set_lines(row, row, { line, new .. tail })
     row = row + 1
   else
-    rift.replace_lines(row, row, { new .. tail, line })
+    set_lines(row, row, { new .. tail, line })
   end
   rift.set_cursor(row, chars(new))
   rift.exec_action("mode:insert")
@@ -438,31 +474,35 @@ function M.setup(user_opts)
 
   if not opts.mappings then return end
 
-  rift.map("n", "gcc", "editor:run:CommentToggle")
-  rift.map("n", "gbc", "editor:run:CommentBlockToggle")
-  rift.map("v", "gc", "editor:run:CommentSelection")
-  rift.map("v", "gb", "editor:run:CommentBlockSelection")
+  map("n", "gcc", "CommentToggle")
+  map("n", "gbc", "CommentBlockToggle")
+  map("v", "gc", "CommentSelection")
+  map("v", "gb", "CommentBlockSelection")
 
   -- rift has no operator-pending hook for plugins, so the common gc{motion}
   -- forms are spelled out. Counts go between gc and the motion: gc3j.
-  rift.map("n", "gcj", "editor:run:CommentDown 1")
-  rift.map("n", "gck", "editor:run:CommentUp 1")
+  map("n", "gcj", "CommentDown 1")
+  map("n", "gck", "CommentUp 1")
   for n = 1, 9 do
-    rift.map("n", "gc" .. n .. "j", "editor:run:CommentDown " .. n)
-    rift.map("n", "gc" .. n .. "k", "editor:run:CommentUp " .. n)
+    map("n", "gc" .. n .. "j", "CommentDown " .. n)
+    map("n", "gc" .. n .. "k", "CommentUp " .. n)
   end
-  rift.map("n", "gcgg", "editor:run:CommentToTop")
-  rift.map("n", "gcG", "editor:run:CommentToBottom")
-  rift.map("n", "gcip", "editor:run:CommentParagraph")
-  rift.map("n", "gcap", "editor:run:CommentParagraph around")
+  map("n", "gcgg", "CommentToTop")
+  map("n", "gcG", "CommentToBottom")
+  map("n", "gcip", "CommentParagraph")
+  map("n", "gcap", "CommentParagraph around")
 
-  rift.map("n", "gco", "editor:run:CommentInsert below")
-  rift.map("n", "gcO", "editor:run:CommentInsert above")
-  rift.map("n", "gcA", "editor:run:CommentInsert eol")
+  map("n", "gco", "CommentInsert below")
+  map("n", "gcO", "CommentInsert above")
+  map("n", "gcA", "CommentInsert eol")
 end
 
 M.commentstrings = commentstrings
 M._toggle_lines = toggle_lines
 M._toggle_block = toggle_block
+
+-- Dropped straight into rift's plugins directory rather than require()d
+-- from a config: set up with the defaults.
+if not MODULE then M.setup() end
 
 return M

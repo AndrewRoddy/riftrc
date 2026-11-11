@@ -4,6 +4,24 @@
 -- that was just written: the formatter prints the formatted file, the changed
 -- lines are swapped into the buffer, and the buffer is saved again.
 local M = {}
+local MODULE = ...
+
+-- Helpers -------------------------------------------------------------------
+
+-- rift.replace_lines drops the newline after the range, joining the next
+-- line onto the last new one, and takes two undo steps. This puts the
+-- newline back and, from Normal mode, wraps the edit in a brief Insert mode
+-- so `u` undoes it in one step.
+local function set_lines(s, e, lines)
+  local out = { table.unpack(lines) }
+  if #out > 0 and e < rift.get_line_count() then out[#out + 1] = "" end
+  local wrap = rift.get_mode() == "normal"
+  if wrap then rift.exec_action("mode:insert") end
+  rift.replace_lines(s, e, out)
+  if wrap then rift.exec_action("mode:normal") end
+end
+
+-----------------------------------------------------------------------------
 
 local is_windows = package.config:sub(1, 1) == "\\"
 
@@ -144,7 +162,7 @@ local function apply_diff(new)
   for i = ns, ne do slice[#slice + 1] = new[i] end
 
   local row, col = rift.get_cursor()
-  rift.replace_lines(s, e, slice)
+  set_lines(s, e, slice)
   if row > e then row = row + #slice - (e - s + 1) end
   rift.set_cursor(math.max(1, row), col)
   return true
@@ -257,5 +275,9 @@ function M.setup(user_opts)
 end
 
 M._apply_diff = apply_diff
+
+-- Dropped straight into rift's plugins directory rather than require()d
+-- from a config: set up with the defaults.
+if not MODULE then M.setup() end
 
 return M
