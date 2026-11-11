@@ -10,8 +10,7 @@ plugin instead.
 riftrc/
   init.lua      settings and keymaps, then require()s each plugin
   plugins/      standalone plugins, one folder each, releasable on their own
-  SPEC/         what I've learned about rift, the porting plan, test tools
-  treesitter/   Neovim's treesitter setup carried over (work in progress)
+  docs/         notes on rift, the porting plan, test tools (not in git)
 ```
 
 ## Plugins
@@ -25,6 +24,7 @@ installs it with the defaults; its README says how to pass options.
 | [rift-comment](plugins/rift-comment) | Comment.nvim: `gcc`, `gbc`, `gcip`, `gco`, ... |
 | [rift-closetag](plugins/rift-closetag) | vim-closetag: close HTML/XML/JSX tags as you type `>` |
 | [rift-conform](plugins/rift-conform) | conform.nvim: format on save with external formatters |
+| [rift-nvim-syntax](plugins/rift-nvim-syntax) | Syntax highlighting exactly like Neovim's (asks a headless `nvim`). Disabled in init.lua |
 | [rift-splunk](plugins/rift-splunk) | splunk-syntax.nvim: SPL highlighting |
 | [rift-indent](plugins/rift-indent) | `>>` / `<<` line shifting |
 | [rift-open-line](plugins/rift-open-line) | `o` keeps the current line's indentation |
@@ -54,6 +54,6 @@ require("riftrc")
 
 ## Testing
 
-`SPEC/tools/replay.sh <file> <keys>...` runs rift headlessly against a copy
-of this directory and prints the buffer. `SPEC/tests/join.sh` checks
-rift-join against Neovim. See `SPEC/SPEC.md`.
+`docs/tools/replay.sh <file> <keys>...` runs rift headlessly against a copy
+of this directory and prints the buffer. `docs/tests/join.sh` checks
+rift-join against Neovim. See `docs/SPEC.md`.
