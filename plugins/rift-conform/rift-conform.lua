@@ -103,6 +103,14 @@ local function formatter_for(path)
 end
 
 local function run(buf, path, name)
+  -- rift-fold cuts closed folds' lines out of the buffer. The formatter's
+  -- output has them, so diffing it into the folded buffer would duplicate
+  -- them. Only checked when rift-fold was require()d.
+  local fold = package.loaded["rift-fold"]
+  if type(fold) == "table" and fold.has_folds and fold.has_folds(buf) then
+    rift.notify("warn", "conform: not formatting while folds are closed (zR opens them)")
+    return
+  end
   local cfg = opts.formatters[name]
   local cmd = resolve_command(name)
   if not cmd then

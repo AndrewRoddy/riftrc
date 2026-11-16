@@ -46,3 +46,6 @@ require("rift-splunk").setup()    -- Splunk (SPL) highlighting
 require("rift-open-line").setup() -- `o` keeps the line's indent
 require("rift-join").setup()      -- `J` / `gJ` join lines like Neovim
 require("rift-clipboard").setup() -- clipboard=unnamedplus: yanks go to the system clipboard
+require("rift-fold").setup()       -- zc/zo/za/zR/zM indent folding
+require("rift-term-scroll").setup() -- scroll terminal history with k/j/<C-b>/<C-f> after Alt+a
+require("rift-rerun").setup()       -- Alt+r / Alt+Shift+r re-run the last / second-last terminal command

@@ -30,6 +30,8 @@ installs it with the defaults; its README says how to pass options.
 | [rift-open-line](plugins/rift-open-line) | `o` keeps the current line's indentation |
 | [rift-join](plugins/rift-join) | `J` / `gJ` join lines exactly like Neovim |
 | [rift-clipboard](plugins/rift-clipboard) | `clipboard=unnamedplus`: yanks go to the system clipboard |
+| [rift-term-scroll](plugins/rift-term-scroll) | Scroll terminal history in terminal-normal mode: `k`/`j` at the edges, `<C-b>`/`<C-f>`, `<C-y>`/`<C-e>` |
+| [rift-fold](plugins/rift-fold) | Indent folding with `zc` `zo` `za` `zR` `zM` |
 
 noice.nvim needs no plugin: rift's command line is already a centered popup,
 and `init.lua` sets it to 60 columns with a box border. For oil.nvim I use
