@@ -40,10 +40,10 @@ rift.set_option("appearance.theme", "gruvbox")
 local here = debug.getinfo(1, "S").source:sub(2):gsub("\\", "/"):match("(.*)/")
 package.path = package.path .. ";" .. here .. "/plugins/?/?.lua"
 
-require("rift-indent").setup()    -- `>>` / `<<` line shifting
-require("rift-comment").setup()   -- Comment.nvim
-require("rift-closetag").setup()  -- vim-closetag
-require("rift-conform").setup()   -- conform.nvim
+require("rift-indent").setup()          -- `>>` / `<<` line shifting
+require("rift-comment").setup()         -- Comment.nvim
+require("rift-closetag").setup()        -- vim-closetag
+require("rift-conform").setup()         -- conform.nvim
 -- Disabled: syntax highlighting exactly like Neovim's (asks a headless
 -- nvim). Uncomment to turn it back on, and drop rift-splunk below, which it
 -- covers.
@@ -57,17 +57,17 @@ require("rift-conform").setup()   -- conform.nvim
 --     end, { force = true })
 --   ]],
 -- })
-require("rift-splunk").setup()    -- Splunk (SPL) highlighting
-require("rift-open-line").setup() -- `o` keeps the line's indent
-require("rift-join").setup()      -- `J` / `gJ` join lines like Neovim
-require("rift-clipboard").setup() -- clipboard=unnamedplus: yanks go to the system clipboard
-require("rift-fold").setup()       -- zc/zo/za/zR/zM indent folding
-require("rift-term-scroll").setup() -- scroll terminal history with k/j/<C-b>/<C-f> after Alt+a
-require("rift-increment").setup()   -- <C-a> / <C-x> add to / subtract from a number
+require("rift-splunk").setup()          -- Splunk (SPL) highlighting
+require("rift-open-line").setup()       -- `o` keeps the line's indent
+require("rift-join").setup()            -- `J` / `gJ` join lines like Neovim
+require("rift-clipboard").setup()       -- clipboard=unnamedplus: yanks go to the system clipboard
+require("rift-fold").setup()            -- zc/zo/za/zR/zM indent folding
+require("rift-term-scroll").setup()     -- scroll terminal history with k/j/<C-b>/<C-f> after Alt+a
+require("rift-increment").setup()       -- <C-a> / <C-x> add to / subtract from a number
 -- Off for now: needs rift.term_send, which released rift doesn't have yet.
--- require("rift-rerun").setup()    -- Alt+r / Alt+Shift+r re-run the last / second-last terminal command
+-- require("rift-rerun").setup()        -- Alt+r / Alt+Shift+r re-run the last / second-last terminal command
 require("rift-insert-nonblank").setup() -- `I` inserts at the first non-blank, like Neovim
-require("rift-jumplist").setup()    -- <C-o> / <C-i> jump list
+require("rift-jumplist").setup()        -- <C-o> / <C-i> jump list
 
 -- riftquire (vimquire for rift): :Search, :SearchSources, ... Lives in its own
 -- repo. Skipped if the folder isn't there, since an error here would stop
