@@ -64,7 +64,10 @@ require("rift-clipboard").setup() -- clipboard=unnamedplus: yanks go to the syst
 require("rift-fold").setup()       -- zc/zo/za/zR/zM indent folding
 require("rift-term-scroll").setup() -- scroll terminal history with k/j/<C-b>/<C-f> after Alt+a
 require("rift-increment").setup()   -- <C-a> / <C-x> add to / subtract from a number
-require("rift-rerun").setup()       -- Alt+r / Alt+Shift+r re-run the last / second-last terminal command
+-- Off for now: needs rift.term_send, which released rift doesn't have yet.
+-- require("rift-rerun").setup()    -- Alt+r / Alt+Shift+r re-run the last / second-last terminal command
+require("rift-insert-nonblank").setup() -- `I` inserts at the first non-blank, like Neovim
+require("rift-jumplist").setup()    -- <C-o> / <C-i> jump list
 
 -- riftquire (vimquire for rift): :Search, :SearchSources, ... Lives in its own
 -- repo. Skipped if the folder isn't there, since an error here would stop
