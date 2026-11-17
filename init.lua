@@ -7,6 +7,20 @@ rift.map("i", "<A-a>", "mode:normal")
 -- Maps Alt+a to take me from terminal insert to terminal normal
 rift.map("t", "<A-a>", "terminal:exit")
 
+-- Esc / Alt+a leave Visual (v, V, Ctrl+V) in one press, like Neovim. rift's
+-- first Esc only leaves Visual and keeps the selection highlighted as a
+-- "banked" region; the second mode:normal clears that. Visual mode falls
+-- back to Normal-mode keys, so mapping them in "n" covers Visual too.
+rift.register_command("ExitVisual", function()
+  -- Tell rift-clipboard this isn't a Visual `y` (it can't tell them apart).
+  local not_yank = _rift_commands.ClipboardNotYank
+  if not_yank then not_yank.fn({}) end
+  rift.exec_action("mode:normal")
+  rift.exec_action("mode:normal")
+end, "Leave Visual mode and clear the selection")
+rift.map("n", "<Esc>", "editor:run:lua _rift_commands.ExitVisual.fn({})")
+rift.map("n", "<A-a>", "editor:run:lua _rift_commands.ExitVisual.fn({})")
+
 -- No glide animation
 rift.exec_action("editor:run:set cursorspeed=1.0")
 
@@ -15,6 +29,7 @@ rift.exec_action("editor:run:set cursorspeed=1.0")
 rift.set_option("command_line.width_ratio", "0.0")
 rift.set_option("command_line.min_width", "60")
 rift.set_option("command_line.borderstyle", "unicode")
+rift.set_option("quitonq", "off")
 
 -- Same background and foreground as my Neovim (#282820 / #EBDBB2).
 rift.set_option("appearance.theme", "gruvbox")
@@ -48,4 +63,16 @@ require("rift-join").setup()      -- `J` / `gJ` join lines like Neovim
 require("rift-clipboard").setup() -- clipboard=unnamedplus: yanks go to the system clipboard
 require("rift-fold").setup()       -- zc/zo/za/zR/zM indent folding
 require("rift-term-scroll").setup() -- scroll terminal history with k/j/<C-b>/<C-f> after Alt+a
+require("rift-increment").setup()   -- <C-a> / <C-x> add to / subtract from a number
 require("rift-rerun").setup()       -- Alt+r / Alt+Shift+r re-run the last / second-last terminal command
+
+-- riftquire (vimquire for rift): :Search, :SearchSources, ... Lives in its own
+-- repo. Skipped if the folder isn't there, since an error here would stop
+-- rift from starting.
+local riftquire = "C:/Coding/riftquire"
+local probe = io.open(riftquire .. "/lua/riftquire/init.lua", "r")
+if probe then
+  probe:close()
+  package.path = package.path .. ";" .. riftquire .. "/lua/?.lua;" .. riftquire .. "/lua/?/init.lua"
+  require("riftquire").setup()
+end

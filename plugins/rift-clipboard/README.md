@@ -65,6 +65,24 @@ nudge is undone.
   (the nudge) before it's put back.
 - No `.` repeat, and deletes don't reach the system clipboard.
 
+## For other plugins
+
+Plugins that leave or edit Visual mode from their own keys can tell this
+one, through rift's command table, so it doesn't mistake that for a `y`:
+
+```lua
+-- Before leaving Visual mode (an Esc map, a fallback): not a yank.
+local c = _rift_commands.ClipboardNotYank
+if c then c.fn({}) end
+-- After changing text without leaving Visual mode: the buffer grew by
+-- `delta` bytes (negative if it shrank).
+local e = _rift_commands.ClipboardVisualEdited
+if e then e.fn({ tostring(delta) }) end
+```
+
+riftrc's Esc / Alt+a map and rift-indent use these, so `Esc` from Visual is
+never taken for a yank and needs no nudge.
+
 ## Install
 
 `rift-clipboard.lua` is the whole plugin and has no dependencies. Copy it into

@@ -600,6 +600,10 @@ local function decide_visual()
   end
 end
 
+-- Set by the ClipboardNotYank command: the Visual mode about to end is being
+-- left by a plugin's own key (an Esc map, a shift), not `y`.
+local not_yank = false
+
 local function on_visual_mode(ev)
   if not opts.visual then return end
   local kind = rift.buf_kind()
@@ -608,11 +612,16 @@ local function on_visual_mode(ev)
       local r, c = rift.get_cursor()
       visual = { anchor = { r, c }, size = buffer_size(), buf = rift.current_buf() }
       pending = nil
+      not_yank = false
     end
     if visual then visual.kind = ev.to end
   elseif ev.from:find("^visual") and visual then
     local v = visual
     visual = nil
+    if not_yank then
+      not_yank = false
+      return
+    end
     if ev.to ~= "normal" or (kind ~= "file" and kind ~= "scratch") then return end
     local r, c = rift.get_cursor()
     local p = { kind = v.kind, anchor = v.anchor, cursor = { r, c }, size = v.size, buf = v.buf }
@@ -728,6 +737,18 @@ function M.setup(user_opts)
     rift.exec_action(args[1] == "redo" and "history:redo" or "history:undo")
   end, "Undo/redo without making p fall back to rift's register")
   rift.register_command("ClipboardNoop", function() end, "Unsupported y{motion}")
+  -- For other plugins that leave Visual mode from a mapped key (rift-indent,
+  -- an Esc map): call this first so it isn't taken for a Visual `y`.
+  rift.register_command("ClipboardNotYank", function()
+    if rift.get_mode() == "visual" then not_yank = true end
+  end, "The Visual mode about to end is not a yank")
+  -- For other plugins that edit text without leaving Visual mode
+  -- (rift-indent's `>`): the edit grew the buffer by N bytes (negative for
+  -- shrinking), so a later `y` isn't taken for a delete. rift fires no
+  -- TextChangedCoarse for plugin edits, so they have to say.
+  rift.register_command("ClipboardVisualEdited", function(args)
+    if visual then visual.size = visual.size + (tonumber(args[1]) or 0) end
+  end, "Text in the Visual selection changed size by N bytes")
 
   -- `y` alone (timed out, or followed by an unsupported motion) does nothing.
   map("n", "y", "ClipboardNoop")

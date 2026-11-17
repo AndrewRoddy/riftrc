@@ -118,7 +118,14 @@ local function shift_block_line(line, dir, left, sw, ts, expand)
     end
     v, last_w, i = v + w, w, i + 1
   end
-  if v < left then return line end
+  -- As in Neovim: empty lines and lines that end before the block are left
+  -- alone; a line that ends right at the block's edge gets the shift added
+  -- at its end by `>` (with any whitespace it already ends in).
+  if n == 0 or v < left then return line end
+  if i > n and v == left then
+    if dir < 0 then return line end
+    return table.concat(ch, "", 1, n - pre_ws_c) .. make_ws(v - pre_ws, sw + pre_ws, ts, expand)
+  end
   -- A tab straddling the edge leaves `v` past it; ch[i - 1] is that tab.
   local split = v > left
 
@@ -170,47 +177,28 @@ local function editable()
   return true
 end
 
--- rift 0.7.1 (the crates.io release) predates `rift.get_selection` and has
--- four bugs this plugin has to steer around there:
---   * replace_lines drops the newline after the range, joining the next line
---     onto the last replaced one;
---   * replace_lines is two undo steps, so `u` first deletes the line;
---   * the snapshot plugins read is only refreshed when the text changes, so
---     after `j` rift.get_cursor() still reports the last edited line;
---   * plugin commands run before that refresh, so a fast `>>>>` sees the line
---     from before the first shift.
--- On those builds only the indent is edited, with insert/delete at the start
--- of the line inside one Insert-mode undo group; the cursor comes from
--- CursorMoved events; and the plugin remembers what it just wrote until the
--- snapshot catches up.
+-- rift.get_selection only exists on unreleased rift builds; on the
+-- released ones (0.7.x) the Visual-mode keys go through shift_visual.
 local legacy = rift.get_selection == nil
 
--- Lines this plugin edited since the last snapshot, by row: { before, after }.
-local written = {}
-local written_buf
-
--- The cursor as of the last CursorMoved event or shift, when newer than the
--- snapshot: { buf, row, col }.
-local moved
-
--- Mappings run through :lua (map), which refreshes the snapshot first,
--- so rift.get_cursor() is current; the old CursorMoved tracking is unused.
+-- Mappings run through :lua (see map), which refreshes the snapshot first,
+-- so the cursor and lines read here are current.
 local function cursor()
   return rift.get_cursor()
 end
 
+-- Moves the cursor and makes `j` / `k` keep its column, as Neovim does after
+-- undo / redo. rift.set_cursor leaves rift's remembered column alone (so `j`
+-- would jump back to wherever it was); a left/right motion clears it.
 local function place_cursor(row, col)
   rift.set_cursor(row, col)
-  if legacy then moved = { buf = rift.current_buf(), row = row, col = col } end
+  rift.exec_action("editor:move:left")
+  rift.exec_action("editor:move:right")
+  rift.set_cursor(row, col)
 end
 
 local function line_at(row)
-  local line = rift.get_lines(row, row)[1] or ""
-  local w = written[row]
-  if legacy and w and written_buf == rift.current_buf() and line == w.before then
-    return w.after
-  end
-  return line
+  return rift.get_lines(row, row)[1] or ""
 end
 
 local function lines_in(s, e)
@@ -220,7 +208,7 @@ local function lines_in(s, e)
 end
 
 -- Rewrites line `row` from `old` to `new` by touching only the indent that
--- differs. An insert is a single undo step on every rift build.
+-- differs.
 local function edit_indent(row, old, new)
   local old_ws = old:match("^[ \t]*")
   local new_ws = new:match("^[ \t]*")
@@ -231,28 +219,34 @@ local function edit_indent(row, old, new)
   rift.set_cursor(row, p)
   if #old_ws > p then rift.delete_forward(#old_ws - p) end
   if #new_ws > p then rift.insert(new_ws:sub(p + 1)) end
-  if written_buf ~= rift.current_buf() then
-    written, written_buf = {}, rift.current_buf()
-  end
-  -- Keep the text the snapshot still shows, however many shifts ago it was.
-  local prev = written[row]
-  local before = (prev and prev.after == old) and prev.before or old
-  written[row] = { before = before, after = new }
 end
 
+-- Replaces lines [s, e] from Normal mode, as one undo step. Only the indent
+-- is edited (replace_lines joins the next line on and takes two undo steps),
+-- inside a brief Insert mode: rift groups everything until Insert mode is
+-- left into one undo step, while each delete outside it is its own.
+--
+-- A shift that changes nothing is still an undo step in Neovim (`u` after
+-- it undoes nothing visible), so then a space is typed and deleted.
 local function replace(s, e, lines)
-  if not legacy then
-    rift.replace_lines(s, e, lines)
-    return
-  end
-  -- Each delete is its own undo step on these builds; Insert mode groups
-  -- everything until it is left into one, so `u` undoes the whole shift.
   rift.exec_action("mode:insert")
+  local changed = false
   for i, new in ipairs(lines) do
     local row = s + i - 1
     local old = line_at(row)
-    if old ~= new then edit_indent(row, old, new) end
+    if old ~= new then
+      edit_indent(row, old, new)
+      changed = true
+    end
   end
+  if not changed then
+    rift.set_cursor(s, 0)
+    rift.insert(" ")
+    rift.delete_before(1)
+  end
+  -- Redo leaves the cursor where it was when the edit ended: the start of
+  -- the first line, as in Neovim.
+  rift.set_cursor(s, 0)
   rift.exec_action("mode:normal")
 end
 
@@ -267,7 +261,229 @@ function M.shift_range(dir, s, e)
   s, e = math.max(1, math.min(s, e)), math.min(total, math.max(s, e))
   local new = shift_lines(lines_in(s, e), dir)
   replace(s, e, new)
-  place_cursor(s, coladvance(new[1], want, ts))
+  rift.set_cursor(s, coladvance(new[1], want, ts))
+end
+
+-- Where the live Visual selection started and its kind: rift.get_cursor()
+-- as Visual mode was entered (rift refreshes the snapshot right before
+-- firing ModeChanged). rift has no way for plugins to read the selection.
+local visual_start -- { buf, row, col, kind = "visual"|"visualline"|"visualblock" }
+
+-- Each shift in Visual is two undo steps (replace_lines deletes lines s..e,
+-- then inserts the new ones). `u` / `<C-r>` are wrapped to take both at
+-- once. A shift is only taken as such when the text matches exactly: before
+-- the first step it must be what the shift left behind (or, for redo, what
+-- it started from), and after that step it must be the in-between state with
+-- lines s..e removed. Anything else gets the ordinary single step.
+local shifts = {}    -- undoable: { buf, s, before, mid, after }
+local unshifts = {}  -- redoable
+local stepping       -- { sh, dir } between the two steps
+
+local function buffer_text()
+  return table.concat(rift.get_lines(1, -1), "\n")
+end
+
+-- Row (1-indexed) holding character offset `off`, counted from the start of
+-- row `s`, in `lines` (rows s, s+1, ...); nil when past the last one.
+local function row_of_offset(lines, s, off)
+  for i, line in ipairs(lines) do
+    local len = utf8.len(line) or #line
+    if off <= len then return s + i - 1 end
+    off = off - len - 1
+  end
+end
+
+local function char_len(s) return utf8.len(s) or #s end
+
+-- Neovim's visual `>` / `<` followed by `gv` (`vnoremap > >gv`): shift the
+-- selected lines one shiftwidth and keep the same selection. Block
+-- selections shift the text from the block's left edge. As in Neovim, both
+-- ends keep their columns, within their (possibly shorter) lines.
+--
+-- rift can't re-enter Visual mode from a plugin, so the lines are rewritten
+-- without leaving it. The selection's anchor is a fixed character offset
+-- that edits don't move, so this only works when the anchor ends up where
+-- Neovim would put it: on its own row, at its own column. Otherwise (e.g.
+-- selecting upward with `Vk`) the lines are shifted and Visual mode ends.
+function M.shift_visual(dir)
+  if not editable() then return end
+  local buf = rift.current_buf()
+  local cur_row, cur_col = cursor()
+  local vs = (visual_start and visual_start.buf == buf) and visual_start
+    or { row = cur_row, col = cur_col, kind = "visual" }
+  local s, e = math.min(vs.row, cur_row), math.max(vs.row, cur_row)
+  local sw, ts, expand = shiftwidth(), rift.get_tab_width(), rift.get_expand_tabs()
+
+  local old = lines_in(s, e)
+  local new = {}
+  if vs.kind == "visualblock" then
+    local left = math.min(
+      (vcol_at(chars_of(line_at(vs.row)), vs.col, ts)),
+      (vcol_at(chars_of(line_at(cur_row)), cur_col, ts)))
+    for i, line in ipairs(old) do
+      new[i] = shift_block_line(line, dir, left, sw, ts, expand)
+    end
+  else
+    for i, line in ipairs(old) do new[i] = shift_line(line, dir, sw, ts, expand) end
+  end
+
+  -- Where Neovim leaves the cursor: same column, within the line.
+  local cur_line = new[cur_row - s + 1]
+  local want_col = math.min(cur_col, char_len(cur_line))
+
+  local all = rift.get_lines(1, -1)
+  local count = #all
+  local before = table.concat(all, "\n")
+
+  -- Where `u` / `<C-r>` leave the cursor, as in Neovim: the start of the
+  -- selection (column 0 for V, the left edge for a block) on line s.
+  local ucol = 0
+  if vs.kind == "visualblock" then
+    ucol = math.min(vs.col, cur_col)
+  elseif vs.kind ~= "visualline" then
+    local anchor_first = vs.row < cur_row or (vs.row == cur_row and vs.col <= cur_col)
+    ucol = anchor_first and vs.col or cur_col
+  end
+  ucol = math.max(0, math.min(ucol, char_len(old[1]) - 1))
+
+  local changed = false
+  for i = 1, #old do
+    if old[i] ~= new[i] then changed = true break end
+  end
+  if not changed then
+    -- Still an undo step in Neovim (`u` then undoes nothing visible): type
+    -- a space at the start of line s and delete it, recorded like a shift
+    -- whose in-between state has the space.
+    local mid = { table.unpack(all) }
+    mid[s] = " " .. mid[s]
+    rift.set_cursor(s, 0)
+    rift.insert(" ")
+    rift.delete_before(1)
+    rift.set_cursor(cur_row, want_col)
+    shifts[#shifts + 1] = { buf = buf, s = s, ucol = ucol, before = before,
+      mid = table.concat(mid, "\n"), after = before }
+    if #shifts > 100 then table.remove(shifts, 1) end
+    unshifts = {}
+    return
+  end
+
+  -- The anchor's offset from the start of row s has to land on its own
+  -- row, at its own column, in the new text.
+  local off = vs.col
+  for row = s, vs.row - 1 do
+    off = off + char_len(old[row - s + 1]) + 1
+  end
+  if row_of_offset(new, s, off) ~= vs.row then
+    -- rift-clipboard would take leaving Visual here for a `y`.
+    local not_yank = _rift_commands and _rift_commands.ClipboardNotYank
+    if not_yank then not_yank.fn({}) end
+    rift.exec_action("mode:normal")
+    rift.exec_action("mode:normal")
+    M.shift_range(dir, s, e)
+    return
+  end
+
+  local out = { table.unpack(new) }
+  if e < count then out[#out + 1] = "" end
+  -- Undo puts the cursor back where it was before the edit.
+  rift.set_cursor(s, ucol)
+  rift.replace_lines(s, e, out)
+  -- rift.set_cursor keeps rift's remembered column for `j` / `k`, as `gv`
+  -- keeps Neovim's.
+  rift.set_cursor(cur_row, want_col)
+
+  -- rift-clipboard tells a Visual `y` from a delete by the buffer's size.
+  local edited = _rift_commands and _rift_commands.ClipboardVisualEdited
+  if edited then
+    local delta = 0
+    for i = 1, #old do delta = delta + #new[i] - #old[i] end
+    edited.fn({ tostring(delta) })
+  end
+
+  -- The in-between state: lines s..e deleted with their newlines (the last
+  -- line has none, so the newline before it stays).
+  local mid = {}
+  for i = 1, s - 1 do mid[#mid + 1] = all[i] end
+  if e < count then
+    for i = e + 1, count do mid[#mid + 1] = all[i] end
+  else
+    mid[#mid + 1] = ""
+  end
+  for i = s, e do all[i] = new[i - s + 1] end
+  shifts[#shifts + 1] = { buf = buf, s = s, ucol = ucol, before = before,
+    mid = table.concat(mid, "\n"), after = table.concat(all, "\n") }
+  if #shifts > 100 then table.remove(shifts, 1) end
+  unshifts = {}
+end
+
+-- One undo / redo step. rift-clipboard wraps `u` / `<C-r>` to keep its `p`
+-- working after an undo, so go through it when it's loaded.
+local function history(dir)
+  local cmd = _rift_commands and _rift_commands.ClipboardUndo
+  if cmd then
+    cmd.fn(dir == "redo" and { "redo" } or {})
+  else
+    rift.exec_action("history:" .. dir)
+  end
+end
+
+-- First step of `u` / `<C-r>`. When the text is what a shift left behind
+-- (undo) or started from (redo), the second step is decided by
+-- IndentHistoryStep, run once the first one has been applied.
+local function step(dir)
+  local text, buf = buffer_text(), rift.current_buf()
+  local from, key = dir == "undo" and shifts or unshifts, dir == "undo" and "after" or "before"
+  stepping = nil
+  for i = #from, 1, -1 do
+    local sh = from[i]
+    if sh.buf == buf and sh[key] == text then
+      table.remove(from, i)
+      stepping = { sh = sh, dir = dir, list = from, index = i }
+      break
+    end
+  end
+  history(dir)
+  if stepping then
+    rift.exec_action("editor:run:lua _rift_commands.IndentHistoryStep.fn({})")
+  end
+end
+
+function M.history_step()
+  local st = stepping
+  stepping = nil
+  if not st then return end
+  if rift.current_buf() ~= st.sh.buf or buffer_text() ~= st.sh.mid then
+    -- Something else that happened to leave the same text: that was its
+    -- undo. The shift is still further back, so keep it.
+    table.insert(st.list, math.min(st.index, #st.list + 1), st.sh)
+    return
+  end
+  history(st.dir)
+  place_cursor(st.sh.s, st.sh.ucol)
+  local to = st.dir == "undo" and unshifts or shifts
+  to[#to + 1] = st.sh
+end
+
+function M.undo() step("undo") end
+function M.redo() step("redo") end
+
+-- `>` / `<`: in Visual, shift at once (Neovim's `>gv`); in Normal, a second
+-- `>` / `<` on the same spot shifts the line (`>>` / `<<`). Mapping `>>`
+-- instead would make a lone Visual `>` wait for rift's key timeout.
+local pending -- { buf, row, col, dir }
+
+function M.key(dir)
+  if rift.get_mode() == "visual" then
+    pending = nil
+    return M.shift_visual(dir)
+  end
+  local buf, row, col = rift.current_buf(), cursor()
+  if pending and pending.dir == dir and pending.buf == buf
+    and pending.row == row and pending.col == col then
+    pending = nil
+    return M.shift_current(dir, 1)
+  end
+  pending = { buf = buf, row = row, col = col, dir = dir }
 end
 
 function M.shift_current(dir, count)
@@ -390,17 +606,23 @@ end
 function M.setup(user_opts)
   for k, v in pairs(user_opts or {}) do opts[k] = v end
 
-  if legacy then
-    -- Both fire once per render, right after the buffer snapshot refreshes.
-    -- TextChangedCoarse fires once per render, right after the snapshot is
-    -- refreshed; CursorMoved fires then too but refreshes nothing.
-    rift.on("TextChangedCoarse", function()
-      written, moved = {}, nil
-    end)
-    rift.on("CursorMoved", function(ev)
-      moved = { buf = ev.buf, row = ev.row, col = ev.col }
-    end)
-  end
+
+  rift.on("ModeChanged", function(ev)
+    pending = nil
+    local to, from = ev.to or "", ev.from or ""
+    local to_visual, from_visual = to:find("^visual") ~= nil, from:find("^visual") ~= nil
+    if to_visual and not from_visual then
+      local row, col = rift.get_cursor()
+      visual_start = { buf = rift.current_buf(), row = row, col = col, kind = to }
+    elseif to_visual and visual_start then
+      visual_start.kind = to -- v / V / <C-v> switch kind, same anchor
+    elseif not to_visual then
+      visual_start = nil
+    end
+  end)
+  -- A pending `>` / `<` is dropped by anything else that happens.
+  rift.on("CursorMoved", function() pending = nil end)
+  rift.on("TextChangedCoarse", function() pending = nil end)
 
   rift.register_command("Indent", function(args)
     M.shift_current(1, count_arg(args))
@@ -418,10 +640,25 @@ function M.setup(user_opts)
   if not opts.mappings then return end
 
   -- A bare "<" opens a <...> key token, so it has to be written <lt>.
-  map("n", ">>", "Indent")
-  map("n", "<lt><lt>", "Dedent")
-  map("v", ">", "IndentSelection")
-  map("v", "<lt>", "DedentSelection")
+  rift.register_command("IndentKey", function() M.key(1) end,
+    "`>`: shift the Visual selection, or the line on a second `>`")
+  rift.register_command("DedentKey", function() M.key(-1) end,
+    "`<`: shift the Visual selection, or the line on a second `<`")
+  rift.register_command("IndentUndo", function() M.undo() end,
+    "Undo, taking a Visual shift in one step")
+  rift.register_command("IndentRedo", function() M.redo() end,
+    "Redo, taking a Visual shift in one step")
+  rift.register_command("IndentHistoryStep", function() M.history_step() end,
+    "Internal: second step of undoing / redoing a Visual shift")
+  -- Visual mode falls back to Normal-mode keys, so these work in both.
+  map("n", ">", "IndentKey")
+  map("n", "<lt>", "DedentKey")
+  -- Mapped once every plugin is loaded, so this wins over other `u` maps
+  -- (rift-clipboard's is called from here).
+  rift.on("EditorStart", function()
+    map("n", "u", "IndentUndo")
+    map("n", "<C-r>", "IndentRedo")
+  end)
 end
 
 M._shift_line = shift_line
