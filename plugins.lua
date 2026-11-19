@@ -39,11 +39,6 @@ local function repo(name, spec)
   return spec
 end
 
--- riftquire's code is in lua/riftquire/init.lua, which riftpm doesn't add to
--- the path itself.
-local riftquire = "C:/Coding/riftquire"
-package.path = package.path .. ";" .. riftquire .. "/lua/?/init.lua"
-
 local plugins = {
   repo("rift-indent"),          -- `>>` / `<<` line shifting
   mine("rift-comment"),         -- Comment.nvim
@@ -77,12 +72,7 @@ local plugins = {
   mine("rift-rerun", { enabled = false }), -- Alt+r / Alt+Shift+r re-run the last / second-last terminal command
   mine("rift-insert-nonblank"), -- `I` inserts at the first non-blank, like Neovim
   repo("rift-jumplist"),        -- <C-o> / <C-i> jump list
-  -- vimquire for rift: :Search, :SearchSources, ... Skipped if the repo
-  -- isn't on this machine.
-  {
-    dir = riftquire, name = "riftquire", main = "riftquire",
-    cond = function() return exists(riftquire .. "/lua/riftquire/init.lua") end,
-  },
+  repo("riftquire"),            -- vimquire for rift: :Search, :SearchSources, ...
 }
 
 -- riftpm loads by priority (higher first) and doesn't keep the list order
